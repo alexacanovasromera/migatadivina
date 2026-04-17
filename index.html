@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>DIVINA</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    background: #1a0a2e;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  #stage {
+    position: relative;
+    width: 100vmin;
+    height: 100vmin;
+    max-width: 100vw;
+    max-height: 100vh;
+  }
+  #main-img {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    object-fit: contain;
+    display: block;
+  }
+  #anim-canvas {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    display: none;
+    pointer-events: none;
+  }
+  #debug-overlay {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+  }
+  #zone-label {
+    position: absolute;
+    bottom: 10px; left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0,0,0,0.7);
+    color: #fff;
+    font-family: monospace;
+    font-size: 18px;
+    padding: 6px 14px;
+    border-radius: 8px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+  /* Indicador de carga para móvil lento */
+  #loading-indicator {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    display: none;
+    pointer-events: none;
+    z-index: 10;
+  }
+  #loading-indicator .spinner {
+    width: 36px;
+    height: 36px;
+    border: 3px solid rgba(255,255,255,0.2);
+    border-top-color: rgba(255,255,255,0.8);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* Pantalla de precarga inicial */
+  #preload-screen {
+    position: fixed;
+    inset: 0;
+    background: #1a0a2e;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    z-index: 100;
+    transition: opacity 0.6s ease;
+  }
+  #preload-screen.fade-out {
+    opacity: 0;
+    pointer-events: none;
+  }
+  #preload-screen .pre-spinner {
+    width: 48px;
+    height: 48px;
+    border: 3px solid rgba(255,255,255,0.15);
+    border-top-color: rgba(200,160,255,0.9);
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+  }
+  #preload-screen .pre-bar-wrap {
+    width: 180px;
+    height: 4px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  #preload-screen .pre-bar {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #a855f7, #ec4899);
+    border-radius: 4px;
+    transition: width 0.25s ease;
+  }
+  #preload-screen .pre-text {
+    color: rgba(255,255,255,0.45);
+    font-family: monospace;
+    font-size: 13px;
+    letter-spacing: 0.05em;
+  }
+</style>
+<!-- PWA -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1a0a2e">
+<meta name="mobile-web-app-capable" content="yes">
+
+<!-- iOS específico -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-fullscreen">
+<meta name="apple-mobile-web-app-title" content="Divina">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+</head>
+<body>
+<div id="preload-screen">
+  <div class="pre-spinner"></div>
+  <div class="pre-bar-wrap"><div class="pre-bar" id="pre-bar"></div></div>
+  <div class="pre-text" id="pre-text">Cargando…</div>
+</div>
+
+<div id="stage">
+  <img id="main-img" src="DIVI_IMAGEN_PRINCIPAL.png" alt="Divina">
+  <canvas id="anim-canvas"></canvas>
+  <div id="loading-indicator"><div class="spinner"></div></div>
+  <svg id="debug-overlay" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>
+  <div id="zone-label"></div>
+</div>
+
+<script>
+// ============================================================
+// ANIMATION CONFIG — rutas relativas a index.html
+// ============================================================
+const FRAME_COUNTS = {
+  'maulla':                    18,
+  'cola-sube-baja':            18,
+  'levanta-pata-maulla':       18,
+  'cansada':                   18,
+  'saca-lengua-comida':        18,
+  'gira-cabeza-no':            18,
+  'cabeza-abajo-giro-no':      18,
+  'cabeza-arriba-mueve-rasca': 18,
+  'cabeza-arriba-rasca':       18,
+  'cabeza-abajo-giro-rasca':   18,
+  'maulla-ataque':             18,
+  'reina':                     18,
+};
+
+function frames(name) {
+  const arr = [];
+  const count = FRAME_COUNTS[name] || 18;
+  for (let i = 0; i < count; i++) {
+    arr.push(`animations/${name}/frame_${String(i).padStart(4,'0')}.png`);
+  }
+  return arr;
+}
+
+const ANIMS = {
+  'maulla':                    frames('maulla'),
+  'cola-sube-baja':            frames('cola-sube-baja'),
+  'levanta-pata-maulla':       frames('levanta-pata-maulla'),
+  'cansada':                   frames('cansada'),
+  'saca-lengua-comida':        frames('saca-lengua-comida'),
+  'gira-cabeza-no':            frames('gira-cabeza-no'),
+  'cabeza-abajo-giro-no':      frames('cabeza-abajo-giro-no'),
+  'cabeza-arriba-mueve-rasca': frames('cabeza-arriba-mueve-rasca'),
+  'cabeza-arriba-rasca':       frames('cabeza-arriba-rasca'),
+  'cabeza-abajo-giro-rasca':   frames('cabeza-abajo-giro-rasca'),
+  'maulla-ataque':             frames('maulla-ataque'),
+  'reina':                     frames('reina'),
+};
+
+const AUDIO_MAP = {
+  'maulla.mp3':                    'audio/maulla.mp3',
+  'levanta-pata-maulla.mp3':       'audio/levanta-pata-maulla.mp3',
+  'cabeza-abajo-giro-rasca.mp3':   'audio/cabeza-abajo-giro-rasca.mp3',
+  'cabeza-arriba-mueve-rasca.mp3': 'audio/cabeza-arriba-mueve-rasca.mp3',
+  'cabeza-arriba-rasca.mp3':       'audio/cabeza-arriba-rasca.mp3',
+  'maulla-ataque.mp3':             'audio/maulla-ataque.mp3',
+};
+
+// ============================================================
+// CACHÉ DE FRAMES
+// Almacena objetos Image() ya decodificados.
+// ============================================================
+const frameCache = {}; // src → Image
+
+// ── Descarga con reintentos (hasta MAX_RETRIES) ──────────────
+const MAX_RETRIES   = 3;
+const RETRY_BASE_MS = 600; // espera base exponencial
+
+function loadFrameWithRetry(src, attempt) {
+  attempt = attempt || 0;
+  if (frameCache[src]) return Promise.resolve(frameCache[src]);
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => { frameCache[src] = img; resolve(img); };
+    img.onerror = () => {
+      if (attempt < MAX_RETRIES) {
+        const delay = RETRY_BASE_MS * Math.pow(2, attempt); // 600 / 1200 / 2400 ms
+        setTimeout(() => loadFrameWithRetry(src, attempt + 1).then(resolve), delay);
+      } else {
+        resolve(null); // rendirse tras 3 intentos → la anim salta ese frame
+      }
+    };
+    img.src = src;
+  });
+}
+
+// ── Cola con concurrencia limitada ───────────────────────────
+// iOS Safari colapsa con >6 peticiones simultáneas al mismo host.
+// Mantenemos máx. CONCURRENCY descargas activas a la vez.
+const CONCURRENCY = 4;
+
+function runQueue(tasks, onProgress) {
+  // tasks: array de funciones () => Promise
+  return new Promise((resolve) => {
+    let nextIdx   = 0;
+    let active    = 0;
+    let completed = 0;
+    const total   = tasks.length;
+    if (total === 0) { resolve(); return; }
+
+    function pump() {
+      while (active < CONCURRENCY && nextIdx < total) {
+        const task = tasks[nextIdx++];
+        active++;
+        task().then(() => {
+          active--;
+          completed++;
+          if (onProgress) onProgress(completed, total);
+          if (completed === total) resolve();
+          else pump();
+        });
+      }
+    }
+    pump();
+  });
+}
+
+/**
+ * Precarga todos los frames de una animación usando la cola.
+ */
+function preloadAnim(name) {
+  const frameList = ANIMS[name];
+  if (!frameList) return Promise.resolve();
+  const tasks = frameList.map(src => () => loadFrameWithRetry(src));
+  return runQueue(tasks, null);
+}
+
+/**
+ * Precarga TODAS las animaciones con cola controlada y barra de progreso.
+ * Devuelve una Promise que resuelve cuando el 100% está en caché.
+ */
+function preloadAll() {
+  const allNames   = Object.keys(ANIMS);
+  const allSrcs    = allNames.flatMap(n => ANIMS[n] || []);
+  const totalFrames = allSrcs.length;
+
+  const bar  = document.getElementById('pre-bar');
+  const text = document.getElementById('pre-text');
+
+  const tasks = allSrcs.map(src => () => loadFrameWithRetry(src));
+
+  return runQueue(tasks, (done, total) => {
+    const pct = Math.round((done / total) * 100);
+    if (bar)  bar.style.width  = pct + '%';
+    if (text) text.textContent = `Cargando… ${pct}%`;
+  });
+}
+
+let appReady = false; // true cuando la precarga inicial terminó
+
+// ============================================================
+// AUDIO ENGINE — con desbloqueo iOS en primer gesto
+// ============================================================
+let audioUnlocked = false;
+
+function unlockAudio() {
+  if (audioUnlocked) return;
+  audioUnlocked = true;
+  for (const key in AUDIO_MAP) {
+    try {
+      const a = new Audio(AUDIO_MAP[key]);
+      a.muted = true;
+      const p = a.play();
+      if (p) p.then(() => a.pause()).catch(() => {});
+    } catch(e) {}
+  }
+}
+
+function playSound(key) {
+  if (!key || !AUDIO_MAP[key]) return;
+  try {
+    const a = new Audio(AUDIO_MAP[key]);
+    a.play().catch(() => {});
+  } catch(e) {}
+}
+
+function playSoundTimes(key, times) {
+  if (!key || !AUDIO_MAP[key]) return;
+  let count = 0;
+  function playNext() {
+    if (count >= times) return;
+    count++;
+    const a = new Audio(AUDIO_MAP[key]);
+    a.play().catch(() => {});
+    a.addEventListener('ended', playNext);
+  }
+  playNext();
+}
+
+// ============================================================
+// ANIMATION ENGINE — Canvas (evita re-decodificación en iOS)
+// ============================================================
+const animCanvas     = document.getElementById('anim-canvas');
+const animCtx        = animCanvas.getContext('2d');
+const mainImg        = document.getElementById('main-img');
+const loadingEl      = document.getElementById('loading-indicator');
+
+let animRunning  = false;
+let animInterval = null;
+let pendingAbort = false;
+
+const FPS      = 12;
+const INTERVAL = 1000 / FPS;
+const SPINNER_DELAY = 400;
+
+function showSpinner() { loadingEl.style.display = 'block'; }
+function hideSpinner() { loadingEl.style.display = 'none';  }
+
+// Ajusta el canvas al tamaño real del stage en píxeles
+function resizeCanvas() {
+  const stage = document.getElementById('stage');
+  animCanvas.width  = stage.clientWidth;
+  animCanvas.height = stage.clientHeight;
+}
+
+function drawFrame(img) {
+  if (!img) return;
+  animCtx.clearRect(0, 0, animCanvas.width, animCanvas.height);
+  // Escalar manteniendo aspect ratio (igual que object-fit: contain)
+  const cw = animCanvas.width, ch = animCanvas.height;
+  const iw = img.naturalWidth,  ih = img.naturalHeight;
+  const scale = Math.min(cw / iw, ch / ih);
+  const dx = (cw - iw * scale) / 2;
+  const dy = (ch - ih * scale) / 2;
+  animCtx.drawImage(img, dx, dy, iw * scale, ih * scale);
+}
+
+function playAnim(name, soundKey, onDone) {
+  if (animRunning) return false;
+  const frameList = ANIMS[name];
+  if (!frameList) { if (onDone) onDone(); return false; }
+
+  animRunning  = true;
+  pendingAbort = false;
+
+  const spinnerTimer = setTimeout(showSpinner, SPINNER_DELAY);
+
+  preloadAnim(name).then(() => {
+    clearTimeout(spinnerTimer);
+    hideSpinner();
+
+    if (pendingAbort) {
+      animRunning = false;
+      if (onDone) onDone();
+      return;
+    }
+
+    resizeCanvas();
+    animCanvas.style.display = 'block';
+    mainImg.style.display    = 'none';
+
+    if (soundKey) playSound(soundKey);
+
+    let idx = 0;
+    animInterval = setInterval(() => {
+      if (!animRunning) { _stopInterval(); return; }
+
+      if (idx < frameList.length) {
+        const cached = frameCache[frameList[idx]];
+        if (cached) drawFrame(cached);
+        idx++;
+      } else {
+        _stopInterval();
+        stopAnim();
+        if (onDone) onDone();
+      }
+    }, INTERVAL);
+  });
+
+  return true;
+}
+
+function _stopInterval() {
+  if (animInterval) { clearInterval(animInterval); animInterval = null; }
+}
+
+function stopAnim() {
+  pendingAbort = true;
+  animRunning  = false;
+  _stopInterval();
+  hideSpinner();
+  animCanvas.style.display = 'none';
+  animCtx.clearRect(0, 0, animCanvas.width, animCanvas.height);
+  mainImg.style.display = 'block';
+}
+
+function rand(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+function triggerAnim(name, sound, onDone) {
+  if (animRunning) return;
+  resetIdleTimer();
+  playAnim(name, sound, () => {
+    resetIdleTimer();
+    if (onDone) onDone();
+  });
+}
+
+// ============================================================
+// IDLE TIMER — 5s / 10s / 15s con reset en cada interacción
+// ============================================================
+let idleTimer = null;
+let idlePhase = 0;
+
+function resetIdleTimer() {
+  clearTimeout(idleTimer);
+  idlePhase = 0;
+  scheduleIdle();
+}
+
+function scheduleIdle() {
+  idleTimer = setTimeout(onIdleTick, 5000);
+}
+
+function onIdleTick() {
+  if (animRunning) { idleTimer = setTimeout(onIdleTick, 1000); return; }
+
+  if (idlePhase === 0) {
+    playAnim('maulla', 'maulla.mp3', () => {
+      idlePhase = 1;
+      scheduleIdle();
+    });
+  } else if (idlePhase === 1) {
+    const choice = rand([
+      ['cola-sube-baja', null],
+      ['levanta-pata-maulla', 'levanta-pata-maulla.mp3']
+    ]);
+    playAnim(choice[0], choice[1], () => {
+      idlePhase = 2;
+      scheduleIdle();
+    });
+  } else if (idlePhase === 2) {
+    playAnim('cansada', null, () => {
+      idlePhase = 0;
+      scheduleIdle();
+    });
+  }
+}
+
+// ============================================================
+// ZONAS TÁCTILES
+// ============================================================
+function getZone(rx, ry) {
+  if (ry > 0.72 && rx > 0.68) return 'cola';
+  if (ry < 0.18 && rx >= 0.56 && rx < 0.72) return 'orejas';
+  if (ry < 0.18 && rx >= 0.28 && rx < 0.44) return 'orejas';
+  if (ry < 0.18 && rx >= 0.44 && rx < 0.56) return 'ojo-izquierdo';
+  if (ry >= 0.18 && ry < 0.28 && rx >= 0.30 && rx < 0.70) return 'cabeza';
+  if (ry >= 0.28 && ry < 0.38 && rx >= 0.34 && rx < 0.66) return 'boca';
+  if (ry >= 0.38 && ry < 0.72 && rx >= 0.22 && rx < 0.78) return 'pecho';
+  if (ry >= 0.72 && ry < 0.94 && rx >= 0.22 && rx < 0.68) return 'patas';
+  return ry < 0.5 ? 'cabeza' : 'pecho';
+}
+
+// ============================================================
+// INTERACCIÓN POR ZONA
+// ============================================================
+function handleZone(zone) {
+  if (animRunning) return;
+
+  switch (zone) {
+
+    case 'boca':
+      triggerAnim(rand(['saca-lengua-comida', 'gira-cabeza-no', 'cabeza-abajo-giro-no']), null);
+      break;
+
+    case 'pecho': {
+      const p = rand([
+        ['cabeza-arriba-mueve-rasca', 'cabeza-arriba-mueve-rasca.mp3'],
+        ['cabeza-arriba-rasca',       'cabeza-arriba-rasca.mp3']
+      ]);
+      triggerAnim(p[0], p[1]);
+      break;
+    }
+
+    case 'cabeza':
+      triggerAnim('cabeza-abajo-giro-rasca', 'cabeza-abajo-giro-rasca.mp3');
+      break;
+
+    case 'orejas': {
+      const e = rand([
+        ['cabeza-abajo-giro-no', null],
+        ['maulla-ataque',        'maulla-ataque.mp3']
+      ]);
+      triggerAnim(e[0], e[1]);
+      break;
+    }
+
+    case 'patas':
+      resetIdleTimer();
+      playSoundTimes('levanta-pata-maulla.mp3', 1);
+      playAnim('levanta-pata-maulla', null, resetIdleTimer);
+      break;
+
+    case 'ojo-izquierdo':
+      triggerAnim('reina', null);
+      break;
+
+    case 'cola':
+      triggerAnim('cola-sube-baja', null);
+      break;
+  }
+}
+
+// ============================================================
+// EVENT LISTENERS
+// ============================================================
+const stage = document.getElementById('stage');
+
+function handleInteraction(clientX, clientY) {
+  if (!appReady) return;           // bloquear hasta que todo esté cargado
+  unlockAudio(); // desbloquea iOS en el primer toque
+  if (animRunning) return;
+  resetIdleTimer();
+  const rect = stage.getBoundingClientRect();
+  const rx = (clientX - rect.left) / rect.width;
+  const ry = (clientY - rect.top) / rect.height;
+  const zone = getZone(rx, ry);
+  showZoneLabel(zone, rx, ry);
+  handleZone(zone);
+}
+
+stage.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    handleInteraction(t.clientX, t.clientY);
+  }
+}, { passive: false });
+
+stage.addEventListener('click', (e) => {
+  handleInteraction(e.clientX, e.clientY);
+});
+
+stage.addEventListener('contextmenu', e => e.preventDefault());
+
+// ============================================================
+// DEBUG
+// ============================================================
+const DEBUG = false;
+
+const ZONE_COLORS = {
+  'orejas':       'rgba(255,100,100,0.35)',
+  'ojo-izquierdo':'rgba(0,200,255,0.45)',
+  'cabeza':       'rgba(255,200,0,0.30)',
+  'boca':         'rgba(255,100,255,0.40)',
+  'pecho':        'rgba(100,255,100,0.30)',
+  'patas':        'rgba(100,150,255,0.35)',
+  'cola':         'rgba(255,165,0,0.40)',
+};
+
+const ZONE_RECTS = [
+  { name:'oreja-izq',      x:28,   y:2,    w:16,  h:16,  zone:'orejas' },
+  { name:'ojo-izquierdo',  x:44,   y:2,    w:12,  h:16,  zone:'ojo-izquierdo' },
+  { name:'oreja-der',      x:56,   y:2,    w:16,  h:16,  zone:'orejas' },
+  { name:'cabeza',         x:30,   y:18,   w:40,  h:10,  zone:'cabeza' },
+  { name:'boca',           x:34,   y:28,   w:32,  h:10,  zone:'boca' },
+  { name:'pecho',          x:22,   y:38,   w:56,  h:34,  zone:'pecho' },
+  { name:'patas',          x:22,   y:72,   w:46,  h:22,  zone:'patas' },
+  { name:'cola',           x:68,   y:72,   w:30,  h:22,  zone:'cola' },
+];
+
+function drawDebugOverlay() {
+  if (!DEBUG) return;
+  const svg = document.getElementById('debug-overlay');
+  svg.innerHTML = '';
+  for (const r of ZONE_RECTS) {
+    const color = ZONE_COLORS[r.zone] || 'rgba(255,255,255,0.2)';
+    const rect = document.createElementNS('http://www.w3.org/2000/svg','rect');
+    rect.setAttribute('x', r.x); rect.setAttribute('y', r.y);
+    rect.setAttribute('width', r.w); rect.setAttribute('height', r.h);
+    rect.setAttribute('fill', color);
+    rect.setAttribute('stroke', 'white');
+    rect.setAttribute('stroke-width', '0.5');
+    svg.appendChild(rect);
+
+    const text = document.createElementNS('http://www.w3.org/2000/svg','text');
+    text.setAttribute('x', r.x + r.w/2); text.setAttribute('y', r.y + r.h/2 + 1.5);
+    text.setAttribute('text-anchor','middle'); text.setAttribute('font-size','3.5');
+    text.setAttribute('fill','white'); text.setAttribute('font-family','monospace');
+    text.textContent = r.zone;
+    svg.appendChild(text);
+  }
+}
+
+let labelTimer;
+function showZoneLabel(zone, rx, ry) {
+  if (!DEBUG) return;
+  const el = document.getElementById('zone-label');
+  el.textContent = `${zone}  (${rx.toFixed(2)}, ${ry.toFixed(2)})`;
+  el.style.opacity = '1';
+  clearTimeout(labelTimer);
+  labelTimer = setTimeout(() => { el.style.opacity = '0'; }, 2000);
+}
+
+window.addEventListener('load', () => {
+  drawDebugOverlay();
+  preloadAll().then(() => {
+    // Todo cargado: ocultar pantalla de precarga y arrancar
+    const screen = document.getElementById('preload-screen');
+    if (screen) {
+      screen.classList.add('fade-out');
+      setTimeout(() => { screen.style.display = 'none'; }, 650);
+    }
+    appReady = true;
+    resetIdleTimer();
+  });
+});
+</script>
+<script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./sw.js');
+  }
+</script>
+</body>
+</html>
